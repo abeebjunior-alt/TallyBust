@@ -7,7 +7,7 @@ A universal stock-management app (pharmacies, retail, supermarkets, warehouses) 
 ## 1. Create the Supabase project
 
 1. Go to https://supabase.com/dashboard and create a new project.
-2. Once it's provisioned, open **SQL Editor → New query**, paste in the entire contents of `supabase/schema.sql`, and run it. This creates the `settings`, `products`, and `stock_history` tables with Row Level Security already switched on, so each account only ever sees its own data.
+2. Once it's provisioned, open **SQL Editor → New query**, paste in the entire contents of `supabase/schema.sql`, and run it. This creates the `settings`, `products`, and `stock_history` tables with Row Level Security already switched on, so each account only ever sees its own data,
 3. Go to **Project Settings → API** and copy:
    - **Project URL**
    - **anon public** key
