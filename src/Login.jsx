@@ -32,7 +32,7 @@ function Logo() {
         <line x1="19" y1="4" x2="19" y2="26" stroke={T.ink} strokeWidth="2.4" strokeLinecap="round" />
         <line x1="2" y1="26" x2="22" y2="4" stroke={T.blueSoft} strokeWidth="2.6" strokeLinecap="round" />
       </svg>
-      <span style={{ ...mono, fontWeight: 700, fontSize: 16 }}>TallyBust</span>
+      <span style={{ ...mono, fontWeight: 700, fontSize: 16, color: T.blueSoft }}>TallyBust</span>
     </div>
   );
 }
