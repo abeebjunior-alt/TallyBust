@@ -2,7 +2,7 @@
 
 Scan Your Stock. Track Every Sale. Know What Remains.
 
-A universal stock-management app (pharmacies, retail, supermarkets, warehouses) built with React + Vite, backed by Supabase,
+A universal stock-management app (pharmacies, retail, supermarkets, warehouses) built with React + Vite, backed by Supabase.
 
 ## 1. Create the Supabase project
 
