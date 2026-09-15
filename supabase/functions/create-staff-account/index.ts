@@ -46,14 +46,28 @@ function staffPassword(pin: string) {
 function isPinAcceptable(pin: string) {
   return /^\d{6}$/.test(pin) && !WEAK_PINS.has(pin);
 }
+const CORS_HEADERS = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+  "Access-Control-Allow-Methods": "POST, OPTIONS",
+};
+
 function json(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {
     status,
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...CORS_HEADERS },
   });
 }
 
 Deno.serve(async (req) => {
+  // The browser sends a preflight OPTIONS request before the real POST,
+  // because supabase.functions.invoke() attaches an Authorization header.
+  // Without an explicit answer here, the browser blocks the real request
+  // entirely and supabase-js reports it as "Failed to send a request to
+  // the Edge Function" — this was the actual cause of that error.
+  if (req.method === "OPTIONS") {
+    return new Response("ok", { headers: CORS_HEADERS });
+  }
   if (req.method !== "POST") return json({ error: "Method not allowed" }, 405);
 
   let payload: { mode?: string; name?: string; pin?: string; role?: string; staffId?: string | number };
