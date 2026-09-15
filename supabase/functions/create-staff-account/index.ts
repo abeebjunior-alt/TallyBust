@@ -53,6 +53,11 @@ const CORS_HEADERS = {
 };
 
 function json(body: unknown, status = 200) {
+  if (status >= 400) {
+    // Makes every failure visible in the dashboard's Logs tab, not just
+    // in the response body the browser receives.
+    console.error("create-staff-account error:", status, JSON.stringify(body));
+  }
   return new Response(JSON.stringify(body), {
     status,
     headers: { "Content-Type": "application/json", ...CORS_HEADERS },
@@ -78,110 +83,122 @@ Deno.serve(async (req) => {
   }
   const { mode = "create", name, pin, role, staffId } = payload;
 
-  if (!pin || !isPinAcceptable(pin)) {
-    return json({ error: "PIN must be 6 digits and not an obvious pattern." }, 400);
-  }
-  if (mode === "create") {
-    if (!name || !name.trim()) return json({ error: "Name is required." }, 400);
-    if (!role || !ALLOWED_ROLES.includes(role)) return json({ error: "Invalid role." }, 400);
-  }
-  if (mode === "setup_login" && !staffId) {
-    return json({ error: "Missing staffId." }, 400);
-  }
-
-  // Identify the caller from their own JWT — this is the ONLY source of
-  // truth for who they are. We never trust a business/staff id the client
-  // might send for this purpose.
-  const authHeader = req.headers.get("Authorization") ?? "";
-  const callerClient = createClient(SUPABASE_URL, ANON_KEY, {
-    global: { headers: { Authorization: authHeader } },
-  });
-  const { data: { user: caller }, error: authErr } = await callerClient.auth.getUser();
-  if (authErr || !caller) return json({ error: "Not authenticated." }, 401);
-
-  const admin = createClient(SUPABASE_URL, SERVICE_ROLE_KEY);
-
-  // Work out which business the caller belongs to, and whether they're
-  // allowed to manage staff for it — same rule the RLS policies use
-  // (owner, or a staff row with role='Admin').
-  const { data: callerStaffRow } = await admin
-    .from("staff")
-    .select("user_id, role")
-    .eq("auth_user_id", caller.id)
-    .maybeSingle();
-
-  const businessId = callerStaffRow ? callerStaffRow.user_id : caller.id;
-  const callerIsAdmin = !callerStaffRow || callerStaffRow.role === "Admin";
-  if (!callerIsAdmin) return json({ error: "Not authorized to manage staff." }, 403);
-
-  const { data: settingsRow } = await admin
-    .from("settings")
-    .select("business_code")
-    .eq("user_id", businessId)
-    .maybeSingle();
-  if (!settingsRow?.business_code) {
-    return json({ error: "This business isn't fully set up yet — try again shortly." }, 400);
-  }
-
-  const email = staffEmail(name ?? "", settingsRow.business_code);
-  const password = staffPassword(pin);
-
-  if (mode === "setup_login") {
-    const { data: staffRow } = await admin
-      .from("staff")
-      .select("id, user_id")
-      .eq("id", staffId)
-      .maybeSingle();
-    if (!staffRow || staffRow.user_id !== businessId) {
-      return json({ error: "Staff member not found." }, 404);
+  try {
+    if (!pin || !isPinAcceptable(pin)) {
+      return json({ error: "PIN must be 6 digits and not an obvious pattern." }, 400);
+    }
+    if (mode === "create") {
+      if (!name || !name.trim()) return json({ error: "Name is required." }, 400);
+      if (!role || !ALLOWED_ROLES.includes(role)) return json({ error: "Invalid role." }, 400);
+    }
+    if (mode === "setup_login" && !staffId) {
+      return json({ error: "Missing staffId." }, 400);
     }
 
-    const staffEmailForRow = staffEmail(staffRow.id === staffId ? (payload.name ?? "") : "", settingsRow.business_code);
-    // The real email must be derived from the staff row's own name, not
-    // whatever the client happened to send — fetch it explicitly.
-    const { data: fullStaffRow } = await admin.from("staff").select("name").eq("id", staffId).maybeSingle();
-    const realEmail = staffEmail(fullStaffRow?.name ?? "", settingsRow.business_code);
+    // Identify the caller from their own JWT — this is the ONLY source of
+    // truth for who they are. We never trust a business/staff id the client
+    // might send for this purpose.
+    const authHeader = req.headers.get("Authorization") ?? "";
+    const callerClient = createClient(SUPABASE_URL, ANON_KEY, {
+      global: { headers: { Authorization: authHeader } },
+    });
+    const { data: { user: caller }, error: authErr } = await callerClient.auth.getUser();
+    if (authErr || !caller) return json({ error: "Not authenticated." }, 401);
+
+    const admin = createClient(SUPABASE_URL, SERVICE_ROLE_KEY);
+
+    // Work out which business the caller belongs to, and whether they're
+    // allowed to manage staff for it — same rule the RLS policies use
+    // (owner, or a staff row with role='Admin').
+    const { data: callerStaffRow, error: callerStaffErr } = await admin
+      .from("staff")
+      .select("user_id, role")
+      .eq("auth_user_id", caller.id)
+      .maybeSingle();
+    if (callerStaffErr) return json({ error: `Looking up your account: ${callerStaffErr.message}` }, 500);
+
+    const businessId = callerStaffRow ? callerStaffRow.user_id : caller.id;
+    const callerIsAdmin = !callerStaffRow || callerStaffRow.role === "Admin";
+    if (!callerIsAdmin) return json({ error: "Not authorized to manage staff." }, 403);
+
+    const { data: settingsRow, error: settingsErr } = await admin
+      .from("settings")
+      .select("business_code")
+      .eq("user_id", businessId)
+      .maybeSingle();
+    if (settingsErr) return json({ error: `Looking up your business: ${settingsErr.message}` }, 500);
+    if (!settingsRow?.business_code) {
+      return json({ error: "This business isn't fully set up yet — try again shortly." }, 400);
+    }
+
+    const email = staffEmail(name ?? "", settingsRow.business_code);
+    const password = staffPassword(pin);
+
+    if (mode === "setup_login") {
+      const { data: staffRow, error: staffRowErr } = await admin
+        .from("staff")
+        .select("id, user_id, name")
+        .eq("id", staffId)
+        .maybeSingle();
+      if (staffRowErr) return json({ error: `Looking up staff member: ${staffRowErr.message}` }, 500);
+      if (!staffRow || staffRow.user_id !== businessId) {
+        return json({ error: "Staff member not found." }, 404);
+      }
+
+      // The real email must be derived from the staff row's own name, not
+      // whatever the client happened to send.
+      const realEmail = staffEmail(staffRow.name ?? "", settingsRow.business_code);
+
+      const { data: userData, error: createErr } = await admin.auth.admin.createUser({
+        email: realEmail,
+        password,
+        email_confirm: true,
+      });
+      if (createErr) return json({ error: createErr.message }, 400);
+
+      const { error: updateErr } = await admin.from("staff").update({ auth_user_id: userData.user!.id }).eq("id", staffId);
+      if (updateErr) return json({ error: `Saving their login: ${updateErr.message}` }, 500);
+
+      const { error: pinErr } = await admin.rpc("staff_set_pin", { p_staff_id: staffId, p_pin: pin });
+      if (pinErr) return json({ error: `Saving their PIN: ${pinErr.message}` }, 500);
+
+      return json({ ok: true });
+    }
+
+    // mode === "create": brand-new staff member
+    const { data: existing, error: existingErr } = await admin
+      .from("staff")
+      .select("id")
+      .eq("user_id", businessId)
+      .ilike("name", name!.trim())
+      .maybeSingle();
+    if (existingErr) return json({ error: `Checking username: ${existingErr.message}` }, 500);
+    if (existing) return json({ error: "That username is already taken." }, 409);
 
     const { data: userData, error: createErr } = await admin.auth.admin.createUser({
-      email: realEmail,
+      email,
       password,
       email_confirm: true,
     });
     if (createErr) return json({ error: createErr.message }, 400);
 
-    await admin.from("staff").update({ auth_user_id: userData.user!.id }).eq("id", staffId);
-    await admin.rpc("staff_set_pin", { p_staff_id: staffId, p_pin: pin });
+    const { error: insertErr } = await admin.from("staff").insert({
+      user_id: businessId,
+      auth_user_id: userData.user!.id,
+      name: name!.trim(),
+      role,
+      pin, // the DB trigger hashes this into pin_hash and discards the plaintext
+    });
+    if (insertErr) {
+      // Roll back the auth user so we don't leave an orphaned account behind.
+      await admin.auth.admin.deleteUser(userData.user!.id);
+      return json({ error: insertErr.message }, 400);
+    }
+
     return json({ ok: true });
+  } catch (e) {
+    // Catches anything unexpected (missing env var, network hiccup, etc.)
+    // so it's visible in Logs instead of showing up as a blank crash.
+    return json({ error: `Unexpected error: ${e instanceof Error ? e.message : String(e)}` }, 500);
   }
-
-  // mode === "create": brand-new staff member
-  const { data: existing } = await admin
-    .from("staff")
-    .select("id")
-    .eq("user_id", businessId)
-    .ilike("name", name!.trim())
-    .maybeSingle();
-  if (existing) return json({ error: "That username is already taken." }, 409);
-
-  const { data: userData, error: createErr } = await admin.auth.admin.createUser({
-    email,
-    password,
-    email_confirm: true,
-  });
-  if (createErr) return json({ error: createErr.message }, 400);
-
-  const { error: insertErr } = await admin.from("staff").insert({
-    user_id: businessId,
-    auth_user_id: userData.user!.id,
-    name: name!.trim(),
-    role,
-    pin, // the DB trigger hashes this into pin_hash and discards the plaintext
-  });
-  if (insertErr) {
-    // Roll back the auth user so we don't leave an orphaned account behind.
-    await admin.auth.admin.deleteUser(userData.user!.id);
-    return json({ error: insertErr.message }, 400);
-  }
-
-  return json({ ok: true });
 });
