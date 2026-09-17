@@ -1,1 +1,4 @@
+User-agent: *
+Allow: /
 
+Sitemap: https://tallybust.com.ng/sitemap.xml
